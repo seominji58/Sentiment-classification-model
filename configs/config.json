@@ -914,14 +914,11 @@
     "evaluation_strategy": "epoch",
     "save_strategy": "epoch",
     "use_class_weights": true,
-    "sampling_strategy": "balanced",
-    "default_threshold": 0.3,
+    "sampling_strategy": "none",
+    "default_threshold": 0.0,
     "probability_thresholds": {
-      "행복": 0.2,
-      "평온": 0.2,
-      "분노": 0.35,
-      "슬픔": 0.45,
-      "불안": 0.45
+      "행복": 0.18,
+      "평온": 0.18
     }
   },
   "baseline": {
