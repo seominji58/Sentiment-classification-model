@@ -29,8 +29,15 @@
 ## 4. 권장 워크플로우
 1. 데이터 분포 파악 → 필요 시 업/다운샘플링 또는 증강 적용.
 2. `transformer.use_class_weights`가 활성화된 상태로 다양한 하이퍼파라미터·모델을 실험.
-3. 학습 후 `metrics.json`과 클래스별 F1을 확인하고, 임계값·룰 기반 사후 처리로 보정.
-4. 효과적인 조합을 문서화하고, 반복 실험 시 동일 절차를 재사용.
+3. 학습 시 `transformer.sampling_strategy`를 `balanced`로 두어 배치마다 균형 잡힌 샘플링이 이뤄지도록 하고, 로그(`trainer_state.json`)로 정상 작동 여부를 확인합니다.
+4. 학습 후 `metrics.json`과 클래스별 F1을 확인하고, `transformer.default_threshold` 및 `probability_thresholds`로 소프트맥스 임계값을 조정한 뒤 필요하면 룰 기반 보정과 결합합니다.
+5. 효과적인 조합을 문서화하고, 반복 실험 시 동일 절차를 재사용.
+
+### 최신 설정 체크리스트
+- **균형 샘플링**: `configs/config.json` → `transformer.sampling_strategy=balanced` 로 두면 `WeightedRandomSampler`가 활성화되어 행복/평온 같은 소수 클래스가 매 배치에 충분히 포함됩니다.
+- **손실 가중치**: `transformer.use_class_weights=true`로 inverse-frequency 가중치를 유지해 다수 클래스 편향을 추가로 완화합니다.
+- **임계값 후처리**: `transformer.default_threshold`(기본 0.3)와 `probability_thresholds`(행복/평온 0.2, 슬픔/불안 0.45 등)을 조절해 소프트맥스 확률을 기준으로 판정을 보정합니다. 추론 코드에서도 동일 설정을 로드해야 일관성이 유지됩니다.
+- **실행 예시**: `set PYTHONPATH=. && envs\python.exe scripts\train_transformer.py --config configs\config.json` 또는 `envs\python.exe -m scripts.train_transformer --config configs\config.json`을 사용해 학습을 실행합니다.
 
 ## 추가 팁
 - **테스트 데이터 분리**: 최종 성능 확인용 데이터셋은 학습/튜닝에 사용하지 않고 별도 보관합니다.

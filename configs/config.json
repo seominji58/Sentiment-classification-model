@@ -912,7 +912,17 @@
     "warmup_ratio": 0.1,
     "logging_steps": 20,
     "evaluation_strategy": "epoch",
-    "save_strategy": "epoch"
+    "save_strategy": "epoch",
+    "use_class_weights": true,
+    "sampling_strategy": "balanced",
+    "default_threshold": 0.3,
+    "probability_thresholds": {
+      "행복": 0.2,
+      "평온": 0.2,
+      "분노": 0.35,
+      "슬픔": 0.45,
+      "불안": 0.45
+    }
   },
   "baseline": {
     "ngram_range": [

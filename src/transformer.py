@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 import numpy as np
 import pandas as pd
@@ -48,8 +48,11 @@ def train(
 
     try:
         import torch
+        from torch.utils.data import DataLoader, WeightedRandomSampler
     except ImportError as exc:  # pragma: no cover - dependency guard
-        utils.fail("torch 라이브러리가 설치되어 있지 않습니다. pip install torch")
+        utils.fail(
+            "torch 또는 torch.utils.data 모듈을 불러올 수 없습니다. pip install torch"
+        )
 
     (
         Dataset,
@@ -79,6 +82,11 @@ def train(
     ).rename_column("label_id", "labels")
 
     use_class_weights = bool(tfm_cfg.get("use_class_weights", True))
+    sampling_strategy: Optional[str] = tfm_cfg.get("sampling_strategy", "balanced")
+    if sampling_strategy not in {"balanced", "none"}:
+        utils.fail(
+            "transformer.sampling_strategy는 'balanced' 또는 'none' 이어야 합니다."
+        )
     class_weights_tensor = None
 
     if use_class_weights:
@@ -91,6 +99,33 @@ def train(
         total = class_counts.sum()
         weights = total / (num_labels * class_counts.astype(np.float64))
         class_weights_tensor = torch.tensor(weights, dtype=torch.float32)
+
+    default_threshold = tfm_cfg.get("default_threshold")
+    threshold_overrides = tfm_cfg.get("probability_thresholds")
+    thresholds_array: Optional[np.ndarray] = None
+
+    if default_threshold is not None or threshold_overrides:
+        if default_threshold is None:
+            default_value = 0.0
+        else:
+            default_value = float(default_threshold)
+        if not 0.0 <= default_value < 1.0:
+            utils.fail("transformer.default_threshold는 0 이상 1 미만의 값이어야 합니다.")
+
+        thresholds_array = np.full(num_labels, default_value, dtype=np.float64)
+
+        if threshold_overrides:
+            for label, value in threshold_overrides.items():
+                if label not in label2id:
+                    utils.fail(
+                        f"probability_thresholds에 정의된 라벨 '{label}' 이(가) 학습 데이터 라벨에 없습니다."
+                    )
+                threshold_value = float(value)
+                if not 0.0 <= threshold_value < 1.0:
+                    utils.fail(
+                        "probability_thresholds 값은 0 이상 1 미만이어야 합니다."
+                    )
+                thresholds_array[label2id[label]] = threshold_value
 
     tokenizer = AutoTokenizer.from_pretrained(tfm_cfg.get("model_name", "klue/bert-base"))
 
@@ -187,19 +222,88 @@ def train(
         logits, labels = eval_pred
         if isinstance(logits, tuple):
             logits = logits[0]
-        predictions = np.argmax(logits, axis=-1)
+
+        if thresholds_array is not None:
+            shifted = logits - logits.max(axis=-1, keepdims=True)
+            probs = np.exp(shifted)
+            probs /= probs.sum(axis=-1, keepdims=True)
+
+            chosen = []
+            for prob_vector in probs:
+                mask = prob_vector >= thresholds_array
+                if np.any(mask):
+                    candidate_indices = np.where(mask)[0]
+                    best_idx = candidate_indices[np.argmax(prob_vector[mask])]
+                    chosen.append(best_idx)
+                else:
+                    chosen.append(int(np.argmax(prob_vector)))
+            predictions = np.array(chosen, dtype=np.int64)
+        else:
+            predictions = np.argmax(logits, axis=-1)
         return {
             "accuracy": accuracy_score(labels, predictions),
             "macro_f1": f1_score(labels, predictions, average="macro", zero_division=0),
         }
 
-    trainer_kwargs = {}
+    trainer_kwargs: Dict[str, object] = {}
+    if sampling_strategy == "balanced":
+        trainer_kwargs["sampling_strategy"] = sampling_strategy
+
+    class SamplingTrainerMixin:
+        def __init__(self, *args, sampling_strategy: str = "none", **kwargs):
+            self.sampling_strategy = sampling_strategy
+            super().__init__(*args, **kwargs)
+
+        def _build_balanced_sampler(self) -> WeightedRandomSampler:
+            if self.train_dataset is None:
+                raise ValueError("train_dataset이 설정되지 않았습니다.")
+
+            labels = self.train_dataset["labels"]
+            labels_array = np.asarray(labels, dtype=np.int64)
+            if labels_array.size == 0:
+                raise ValueError("train_dataset에 레이블이 비어 있습니다.")
+
+            class_counts = np.bincount(
+                labels_array, minlength=self.model.config.num_labels
+            ).astype(np.float64)
+            class_counts[class_counts == 0] = 1.0
+            sample_weights = 1.0 / class_counts[labels_array]
+            return WeightedRandomSampler(
+                sample_weights.tolist(),
+                len(sample_weights),
+                replacement=True,
+            )
+
+        def get_train_dataloader(self):
+            if self.sampling_strategy != "balanced":
+                return super().get_train_dataloader()
+
+            sampler = self._build_balanced_sampler()
+            return DataLoader(
+                self.train_dataset,
+                batch_size=self.args.train_batch_size,
+                sampler=sampler,
+                collate_fn=self.data_collator,
+                drop_last=self.args.dataloader_drop_last,
+                num_workers=self.args.dataloader_num_workers,
+                pin_memory=self.args.dataloader_pin_memory,
+            )
 
     if class_weights_tensor is not None:
-        class WeightedTrainer(Trainer):
-            def __init__(self, *args, class_weights: "torch.Tensor", **kwargs):
+        class WeightedTrainer(SamplingTrainerMixin, Trainer):
+            def __init__(
+                self,
+                *args,
+                class_weights: "torch.Tensor",
+                sampling_strategy: str = "none",
+                **kwargs,
+            ):
                 self.class_weights = class_weights.clone().detach()
-                super().__init__(*args, **kwargs)
+                super().__init__(
+                    *args,
+                    sampling_strategy=sampling_strategy,
+                    **kwargs,
+                )
                 if self.class_weights.dim() != 1:
                     raise ValueError("class_weights는 1차원 텐서여야 합니다.")
 
@@ -220,7 +324,10 @@ def train(
         trainer_cls = WeightedTrainer
         trainer_kwargs["class_weights"] = class_weights_tensor
     else:
-        trainer_cls = Trainer
+        class BalancedTrainer(SamplingTrainerMixin, Trainer):
+            pass
+
+        trainer_cls = BalancedTrainer if sampling_strategy == "balanced" else Trainer
 
     trainer = trainer_cls(
         model=model,
