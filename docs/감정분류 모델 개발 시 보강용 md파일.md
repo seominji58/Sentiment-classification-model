@@ -37,6 +37,7 @@
 - **균형 샘플링**: `configs/config.json` → `transformer.sampling_strategy=balanced` 로 두면 `WeightedRandomSampler`가 활성화되어 행복/평온 같은 소수 클래스가 매 배치에 충분히 포함됩니다.
 - **손실 가중치**: `transformer.use_class_weights=true`로 inverse-frequency 가중치를 유지해 다수 클래스 편향을 추가로 완화합니다.
 - **임계값 후처리**: `transformer.default_threshold`(기본 0.3)와 `probability_thresholds`(행복/평온 0.2, 슬픔/불안 0.45 등)을 조절해 소프트맥스 확률을 기준으로 판정을 보정합니다. 추론 코드에서도 동일 설정을 로드해야 일관성이 유지됩니다.
+- **평가 지표 저장**: 학습 종료 시 `processed/models/transformer/metrics.json`에 `eval_loss`가 함께 기록되고, `processed/models/transformer/final/probability_thresholds.json`으로 임계값이 저장되므로 과적합 점검 및 추론 연동이 쉬워졌습니다.
 - **실행 예시**: `set PYTHONPATH=. && envs\python.exe scripts\train_transformer.py --config configs\config.json` 또는 `envs\python.exe -m scripts.train_transformer --config configs\config.json`을 사용해 학습을 실행합니다.
 
 ## 추가 팁

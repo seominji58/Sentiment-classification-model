@@ -348,12 +348,49 @@ def train(
     trainer.save_model(str(final_path))
     tokenizer.save_pretrained(str(final_path))
 
+    if thresholds_array is not None:
+        threshold_map = {
+            id2label[idx]: float(value)
+            for idx, value in enumerate(thresholds_array.tolist())
+        }
+        with open(final_path / "probability_thresholds.json", "w", encoding="utf-8") as f:
+            json.dump(threshold_map, f, ensure_ascii=False, indent=2)
+
     metrics = {
         "train_runtime": float(train_result.metrics.get("train_runtime", 0.0)),
         "train_samples_per_second": float(train_result.metrics.get("train_samples_per_second", 0.0)),
         "eval_accuracy": float(eval_metrics.get("eval_accuracy", 0.0)),
         "eval_macro_f1": float(eval_metrics.get("eval_macro_f1", 0.0)),
+        "eval_loss": float(eval_metrics.get("eval_loss", 0.0)),
     }
+
+    # 각 평가 시점의 eval_loss를 trainer_state에도 남길 수 있도록 log_history를 보완한다.
+    if "log_history" in train_result.metrics:
+        # `Trainer.train` 리턴에는 일반적으로 log_history가 포함되지 않지만, 방어적으로 처리한다.
+        pass
+
+    trainer_state_path = Path(checkpoint_dir) / "trainer_state.json"
+    if trainer_state_path.exists():
+        try:
+            state = json.loads(trainer_state_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            state = None
+        if state and isinstance(state.get("log_history"), list):
+            for entry in state["log_history"]:
+                if "eval_loss" in entry:
+                    break
+            else:
+                if "eval_loss" in eval_metrics:
+                    state["log_history"].append({
+                        "eval_loss": float(eval_metrics["eval_loss"]),
+                        "eval_accuracy": float(eval_metrics.get("eval_accuracy", 0.0)),
+                        "eval_macro_f1": float(eval_metrics.get("eval_macro_f1", 0.0)),
+                        "epoch": float(train_result.metrics.get("epoch", 0.0)),
+                    })
+                    trainer_state_path.write_text(
+                        json.dumps(state, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
 
     Path(metrics_path).parent.mkdir(parents=True, exist_ok=True)
     with open(metrics_path, "w", encoding="utf-8") as f:
