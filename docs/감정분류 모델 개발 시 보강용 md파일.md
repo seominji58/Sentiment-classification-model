@@ -27,18 +27,22 @@
 - **확률 보정(Calibration)**: Platt Scaling, Isotonic Regression 등을 적용해 출력 확률의 신뢰도를 높이면, 임계값/룰 기반 판단을 더 정확하게 할 수 있습니다.
 
 ## 4. 권장 워크플로우
-1. 데이터 분포 파악 → 필요 시 업/다운샘플링 또는 증강 적용.
-2. `transformer.use_class_weights`가 활성화된 상태로 다양한 하이퍼파라미터·모델을 실험.
-3. 학습 시 `transformer.sampling_strategy`를 `balanced`로 두어 배치마다 균형 잡힌 샘플링이 이뤄지도록 하고, 로그(`trainer_state.json`)로 정상 작동 여부를 확인합니다.
-4. 학습 후 `metrics.json`과 클래스별 F1을 확인하고, `transformer.default_threshold` 및 `probability_thresholds`로 소프트맥스 임계값을 조정한 뒤 필요하면 룰 기반 보정과 결합합니다.
-5. 효과적인 조합을 문서화하고, 반복 실험 시 동일 절차를 재사용.
+1. `scripts/prepare_train.py`로 원본 훈련 CSV를 정제해 `train_clean.csv`를 만들고, 의심 샘플은 `train_flagged.csv`에 따로 모아 둡니다.
+2. 데이터 분포 파악 → 필요 시 업/다운샘플링 또는 증강 적용.
+3. `transformer.use_class_weights`가 활성화된 상태로 다양한 하이퍼파라미터·모델을 실험.
+4. 학습 시 `transformer.sampling_strategy`를 `balanced`로 두어 배치마다 균형 잡힌 샘플링이 이뤄지도록 하고, 로그(`trainer_state.json`)로 정상 작동 여부를 확인합니다.
+5. 학습 후 `metrics.json`과 클래스별 F1을 확인하고, `transformer.default_threshold` 및 `probability_thresholds`로 소프트맥스 임계값을 조정한 뒤 필요하면 룰 기반 보정과 결합합니다.
+6. 필요하면 `train_clean.csv`에 `merged_validation.csv` 등을 결합한 `train_final.csv`로 재학습하고, 마지막에 `test.csv`로 최종 성능을 확정합니다.
+7. 효과적인 조합을 문서화하고, 반복 실험 시 동일 절차를 재사용.
 
 ### 최신 설정 체크리스트
 - **균형 샘플링**: 기본값은 `transformer.sampling_strategy=none`으로 유지해 손실 가중치만 적용합니다. 필요 시 `balanced`로 바꿔 `WeightedRandomSampler`를 활성화해 소수 클래스를 더 자주 학습시킬 수 있습니다.
 - **손실 가중치**: `transformer.use_class_weights=true`로 inverse-frequency 가중치를 유지해 다수 클래스 편향을 추가로 완화합니다.
 - **임계값 후처리**: `transformer.default_threshold=0.0`으로 두고 소수 감정만 개별 임계값(예: 행복/평온 0.18)으로 조절해 기본 의사결정을 유지합니다. 추론 코드에서도 동일 설정을 로드해야 일관성이 유지됩니다.
 - **평가 지표 저장**: 학습 종료 시 `processed/models/transformer/metrics.json`에 `eval_loss`가 함께 기록되고, `processed/models/transformer/final/probability_thresholds.json`으로 임계값이 저장되므로 과적합 점검 및 추론 연동이 쉬워졌습니다.
+- **훈련 데이터 정제**: `scripts/prepare_train.py`로 `train_clean.csv`를 생성하고, `train_flagged.csv`에 모인 의심 샘플은 필요 시 재라벨링하거나 제외합니다.
 - **실행 예시**: `set PYTHONPATH=. && envs\python.exe scripts\train_transformer.py --config configs\config.json` 또는 `envs\python.exe -m scripts.train_transformer --config configs\config.json`을 사용해 학습을 실행합니다.
+- **평가 자동화**: 감정별 정밀도/재현율과 혼동 행렬을 확인하려면 `set PYTHONPATH=. && envs\python.exe scripts\evaluate_transformer.py --split processed\splits\valid.csv --save-report reports\valid_metrics.json`을 실행합니다. 필요하면 `--keyword-boost`로 키워드 기반 확률 보정을 조정하세요.
 
 ## 추가 팁
 - **테스트 데이터 분리**: 최종 성능 확인용 데이터셋은 학습/튜닝에 사용하지 않고 별도 보관합니다.

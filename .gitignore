@@ -16,3 +16,6 @@ processed/
 logs/
 checkpoints/
 *.log
+
+Validation.data/
+Training.data/
